@@ -608,6 +608,25 @@ class Scheduler(SchedulerInterface):
             throttle_prefills and not self.prefill_capacity_bound
         ) and any(not r.is_prefill_chunk for r in self.running)
 
+        # SRPF + Aging Queue Sorting Prototype
+        _now = time.time()
+        _STARVATION_THRESHOLD = 5.0
+
+        def _srpf_key(req):
+            is_starved = (_now - req.arrival_time) > _STARVATION_THRESHOLD
+            remaining_prefill = max(0, req.num_prompt_tokens - req.num_computed_tokens)
+            return (not is_starved, remaining_prefill, req.arrival_time)
+
+        self.running.sort(key=_srpf_key)
+
+        for q in (self.waiting, self.skipped_waiting):
+            _sorted_reqs = sorted(q, key=_srpf_key)
+            if hasattr(q, "clear") and hasattr(q, "extend"):
+                q.clear()
+                q.extend(_sorted_reqs)
+            else:
+                q._heap = _sorted_reqs
+
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
