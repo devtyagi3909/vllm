@@ -377,6 +377,9 @@ class SpeechToTextBaseServing(GenerateBaseServing):
         segments: list[SpeechToTextSegment] = []
         last_timestamp_start = 0
 
+        if len(tokens_with_start) < 2:
+            return []
+
         if tokens_with_start[-2] < init_token and tokens_with_start[-1] >= init_token:
             tokens_with_start = tokens_with_start + (tokens_with_start[-1],)
         avg_logprob = 0.0
