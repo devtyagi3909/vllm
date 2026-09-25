@@ -56,9 +56,11 @@ class ServingRender(BaseServing):
         self.online_renderer = online_renderer
         self.tool_server = tool_server
 
+        tokenizer = online_renderer.renderer.get_tokenizer()
+        resolved_template = getattr(tokenizer, "chat_template", None)
         self._merge_inline_system = (
             AnthropicServingMessages._detect_merge_inline_system(
-                online_renderer.chat_template
+                resolved_template
             )
         )
 

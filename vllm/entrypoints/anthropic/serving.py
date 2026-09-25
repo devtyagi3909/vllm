@@ -139,7 +139,12 @@ class AnthropicServingMessages(OpenAIServingChat):
             "length": "max_tokens",
             "tool_calls": "tool_use",
         }
-        self._merge_inline_system = self._detect_merge_inline_system(chat_template)
+        resolved_template = chat_template
+        if resolved_template is None:
+            tokenizer = online_renderer.renderer.get_tokenizer()
+            resolved_template = getattr(tokenizer, "chat_template", None)
+            
+        self._merge_inline_system = self._detect_merge_inline_system(resolved_template)
 
     @staticmethod
     def _detect_merge_inline_system(chat_template: str | None) -> bool:
