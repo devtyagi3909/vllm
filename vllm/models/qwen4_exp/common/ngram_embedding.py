@@ -181,24 +181,42 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
             quant_config, ModelOptQuantConfigBase
         ) and quant_config.is_layer_excluded(prefix):
             return Qwen4ExpPLEUnquantizedEmbeddingMethod()
+
+        # Check INCConfig and others that use config_parser
+        if hasattr(quant_config, "config_parser") and hasattr(
+            quant_config.config_parser, "resolve"
+        ):
+            layer_config = quant_config.config_parser.resolve(None, prefix)
+            if layer_config is not None and not getattr(
+                layer_config, "quantized", True
+            ):
+                return Qwen4ExpPLEUnquantizedEmbeddingMethod()
+
+        # Check standard ignored_layers
+        ignored_layers = getattr(
+            quant_config,
+            "ignored_layers",
+            getattr(quant_config, "modules_to_not_convert", None),
+        )
+        if ignored_layers is not None:
+            if is_layer_skipped(
+                prefix,
+                ignored_layers,
+                getattr(quant_config, "packed_modules_mapping", {}),
+                match_mode=getattr(quant_config, "ignored_layers_match_mode", "exact"),
+            ):
+                return Qwen4ExpPLEUnquantizedEmbeddingMethod()
+            # PLE checkpoint shards form one runtime embedding parameter.
+            shard_prefix = f"{prefix}.shard_"
+            if any(name.startswith(shard_prefix) for name in ignored_layers):
+                return Qwen4ExpPLEUnquantizedEmbeddingMethod()
+
         if not isinstance(quant_config, Fp8Config):
             raise NotImplementedError(
                 "Qwen4Exp PLE embedding does not support quantization config "
                 f"{type(quant_config).__name__}"
             )
 
-        ignored_layers = quant_config.ignored_layers
-        if is_layer_skipped(
-            prefix,
-            ignored_layers,
-            quant_config.packed_modules_mapping,
-            match_mode=quant_config.ignored_layers_match_mode,
-        ):
-            return Qwen4ExpPLEUnquantizedEmbeddingMethod()
-        # PLE checkpoint shards form one runtime embedding parameter.
-        shard_prefix = f"{prefix}.shard_"
-        if any(name.startswith(shard_prefix) for name in ignored_layers):
-            return Qwen4ExpPLEUnquantizedEmbeddingMethod()
         if not quant_config.is_checkpoint_fp8_serialized:
             raise NotImplementedError(
                 "Qwen4Exp PLE embedding only supports serialized FP8 checkpoints"
