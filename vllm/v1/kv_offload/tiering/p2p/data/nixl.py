@@ -190,7 +190,7 @@ class NixlTransport(DataTransport):
                 self._agent_name,
                 exc,
             )
-            self._agent.release_xfer_handle(handle)
+            self._release_handles([handle])
             return None
         transfer_id = next(self._next_id)
         self._inflight[transfer_id] = _Inflight(peer_id, handle)
