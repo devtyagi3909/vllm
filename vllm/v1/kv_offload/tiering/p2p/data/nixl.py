@@ -185,6 +185,11 @@ class NixlTransport(DataTransport):
         try:
             self._agent.transfer(handle)
         except Exception as exc:
+            logger.error(
+                "NixlTransport %s: write_blocks transfer failed: %s",
+                self._agent_name,
+                exc,
+            )
             self._agent.release_xfer_handle(handle)
             return None
         transfer_id = next(self._next_id)
