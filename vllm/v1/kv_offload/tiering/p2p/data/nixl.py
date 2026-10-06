@@ -185,6 +185,7 @@ class NixlTransport(DataTransport):
         try:
             self._agent.transfer(handle)
         except Exception as exc:
+            self._agent.release_xfer_handle(handle)
             return None
         transfer_id = next(self._next_id)
         self._inflight[transfer_id] = _Inflight(peer_id, handle)
