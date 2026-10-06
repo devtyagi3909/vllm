@@ -225,6 +225,9 @@ class NixlTransport(DataTransport):
                     transfer_id,
                     exc,
                 )
+                if failed_ids is None:
+                    failed_ids = []
+                failed_ids.append(transfer_id)
                 continue
             if state == "DONE":
                 if done_ids is None:
