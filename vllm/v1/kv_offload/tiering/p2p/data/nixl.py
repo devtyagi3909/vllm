@@ -182,7 +182,16 @@ class NixlTransport(DataTransport):
             remote_dlist,
             np.asarray(remote_idxs, dtype=np.int32),
         )
-        self._agent.transfer(handle)
+        try:
+            self._agent.transfer(handle)
+        except Exception as exc:
+            logger.error(
+                "NixlTransport %s: write_blocks transfer failed: %s",
+                self._agent_name,
+                exc,
+            )
+            self._release_handles([handle])
+            return None
         transfer_id = next(self._next_id)
         self._inflight[transfer_id] = _Inflight(peer_id, handle)
         return transfer_id
@@ -216,6 +225,9 @@ class NixlTransport(DataTransport):
                     transfer_id,
                     exc,
                 )
+                if failed_ids is None:
+                    failed_ids = []
+                failed_ids.append(transfer_id)
                 continue
             if state == "DONE":
                 if done_ids is None:
