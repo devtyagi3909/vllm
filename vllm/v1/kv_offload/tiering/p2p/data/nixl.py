@@ -182,7 +182,10 @@ class NixlTransport(DataTransport):
             remote_dlist,
             np.asarray(remote_idxs, dtype=np.int32),
         )
-        self._agent.transfer(handle)
+        try:
+            self._agent.transfer(handle)
+        except Exception as exc:
+            return None
         transfer_id = next(self._next_id)
         self._inflight[transfer_id] = _Inflight(peer_id, handle)
         return transfer_id
