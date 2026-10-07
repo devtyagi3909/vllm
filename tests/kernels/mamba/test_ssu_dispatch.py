@@ -618,15 +618,22 @@ def test_replayssm_mixer_selects_mtp_layout(
         (MambaBackendEnum.FLASHINFER, 3, 20),
     ],
 )
+@pytest.mark.parametrize(
+    ("n_groups", "tp_world_size", "expected_local_ngroups"),
+    [
+        (4, 2, 2),  # divisible
+        (1, 2, 1),  # non-divisible
+    ],
+)
 def test_replayssm_physical_ring_shape(
-    backend, num_speculative_tokens, expected_ring_len
+    backend, num_speculative_tokens, expected_ring_len, n_groups, tp_world_size, expected_local_ngroups
 ):
     base_shapes = ((64, 3), (8, 4, 16))
 
     shapes = MambaStateShapeCalculator.append_replayssm_ring(
         base_shapes,
-        n_groups=4,
-        tp_world_size=2,
+        n_groups=n_groups,
+        tp_world_size=tp_world_size,
         logical_window=16,
         backend=backend,
         num_speculative_tokens=num_speculative_tokens,
@@ -635,5 +642,5 @@ def test_replayssm_physical_ring_shape(
     assert shapes[2:] == (
         (8, expected_ring_len, 4),
         (8, expected_ring_len),
-        (2, expected_ring_len, 16),
+        (expected_local_ngroups, expected_ring_len, 16),
     )
