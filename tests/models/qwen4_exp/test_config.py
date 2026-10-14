@@ -15,7 +15,6 @@ from vllm.model_executor.models.config import (
     Qwen3_5ForConditionalGenerationConfig,
     Qwen4ExpForConditionalGenerationConfig,
 )
-from vllm.models.qwen4_exp.nvidia.model_state import Qwen4ExpModelState
 from vllm.v1.worker.gpu.model_states.mamba_hybrid import MambaHybridModelState
 
 from ...utils import spawn_new_process_for_each_test
@@ -205,8 +204,12 @@ def test_qwen4_exp_rejects_pipeline_parallel_only_with_ple(ple_layer_ids) -> Non
             Qwen4ExpForConditionalGenerationConfig.verify_and_update_config(vllm_config)
 
 
-def test_qwen4_exp_model_state_prepares_ngram_context() -> None:
-    model_state = object.__new__(Qwen4ExpModelState)
+@pytest.mark.parametrize("backend", ["amd", "nvidia"])
+def test_qwen4_exp_model_state_prepares_ngram_context(backend: str) -> None:
+    model_state_cls = import_module(
+        f"vllm.models.qwen4_exp.{backend}.model_state"
+    ).Qwen4ExpModelState
+    model_state = object.__new__(model_state_cls)
     model_state.uses_ngram_embedding = True
     model_state.ngram_context_len = 3
     model_state.ngram_eos_token_id = 99
@@ -262,8 +265,12 @@ def test_qwen4_exp_model_state_prepares_ngram_context() -> None:
     assert model_inputs["ngram_context"].data_ptr() == ngram_context.data_ptr()
 
 
-def test_qwen4_exp_model_state_prepares_stable_dummy_ngram_inputs() -> None:
-    model_state = object.__new__(Qwen4ExpModelState)
+@pytest.mark.parametrize("backend", ["amd", "nvidia"])
+def test_qwen4_exp_model_state_prepares_stable_dummy_ngram_inputs(backend: str) -> None:
+    model_state_cls = import_module(
+        f"vllm.models.qwen4_exp.{backend}.model_state"
+    ).Qwen4ExpModelState
+    model_state = object.__new__(model_state_cls)
     model_state.uses_ngram_embedding = True
     model_state.ngram_eos_token_id = 99
     model_state.ngram_context = torch.empty((8, 3), dtype=torch.int32)
