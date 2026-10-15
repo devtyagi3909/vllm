@@ -136,9 +136,22 @@ class LoRAConfig:
 
     def verify_with_model_config(self, model_config: ModelConfig):
         if self.lora_dtype in (None, "auto"):
-            self.lora_dtype = model_config.dtype
-        elif isinstance(self.lora_dtype, str):
-            self.lora_dtype = getattr(torch, self.lora_dtype)
+            self.lora_dtype = getattr(model_config, "dtype", None)
+        if isinstance(self.lora_dtype, str):
+            if hasattr(torch, self.lora_dtype):
+                self.lora_dtype = getattr(torch, self.lora_dtype)
+            elif self.lora_dtype in ("half", "fp16"):
+                self.lora_dtype = torch.float16
+            elif self.lora_dtype in ("bf16",):
+                self.lora_dtype = torch.bfloat16
+            elif self.lora_dtype in ("float", "fp32"):
+                self.lora_dtype = torch.float32
+
+        if self.lora_dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError(
+                f"LoRA only supports float16 and bfloat16, but got {self.lora_dtype}. "
+                "Please configure --lora-dtype to either float16 or bfloat16."
+            )
 
         architectures = getattr(model_config, "architectures", None) or []
         is_inkling = any("Inkling" in arch for arch in architectures)
