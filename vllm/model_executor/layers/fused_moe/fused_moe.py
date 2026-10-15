@@ -1404,6 +1404,12 @@ def get_default_config(
         else:
             num_stages = 3
 
+        if dtype in (torch.float32, "float32", "float", "torch.float32"):
+            block_m = min(block_m, 64)
+            block_k = 64
+            block_n = 64
+            num_stages = 2
+
         config = {
             "BLOCK_SIZE_M": block_m,
             "BLOCK_SIZE_N": block_n,
