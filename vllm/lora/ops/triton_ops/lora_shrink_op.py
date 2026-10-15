@@ -277,10 +277,19 @@ def _lora_shrink(
         # None of the inputs require LoRA.
         return
 
-    assert inputs.dtype == lora_a_weights[0].dtype
-    assert inputs.dtype in [torch.float16, torch.bfloat16]
+    if inputs.dtype != lora_a_weights[0].dtype:
+        raise ValueError(
+            f"inputs.dtype ({inputs.dtype}) must match lora_a_weights dtype ({lora_a_weights[0].dtype})"
+        )
+    if inputs.dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError(
+            f"inputs.dtype must be float16 or bfloat16, got {inputs.dtype}"
+        )
     for weight in lora_a_weights:
-        assert weight.dtype in [torch.float16, torch.bfloat16]
+        if weight.dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError(
+                f"lora_a_weights must have dtype float16 or bfloat16, got {weight.dtype}"
+            )
 
     assert inputs.size(1) == lora_a_weights[0].size(-1)
     inputs = inputs.contiguous()
