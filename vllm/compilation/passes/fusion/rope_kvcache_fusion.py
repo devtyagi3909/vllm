@@ -96,6 +96,53 @@ direct_register_custom_op(
 )
 
 
+def _rope_kvcache_match_shape_check(match: pm.Match, expected_qkv_size: int) -> bool:
+    """Ensure the matched QKV tensor dimensions match the pattern's split sizes."""
+    if match.args and isinstance(match.args[0], fx.Node):
+        qkv_node = match.args[0]
+        val = qkv_node.meta.get("val")
+        if (
+            val is not None
+            and hasattr(val, "shape")
+            and len(val.shape) > 0
+            and val.shape[-1] != expected_qkv_size
+        ):
+            return False
+        tensor_meta = qkv_node.meta.get("tensor_meta")
+        if tensor_meta is not None:
+            shape = getattr(tensor_meta, "shape", None)
+            if shape and len(shape) > 0 and shape[-1] != expected_qkv_size:
+                return False
+
+    for node in match.nodes:
+        if (
+            node.op == "call_function"
+            and (
+                node.target == torch.ops.aten.split_with_sizes.default
+                or node.target == torch.ops.aten.split.Tensor
+                or "split" in getattr(node.target, "__name__", str(node.target))
+            )
+            and node.args
+            and isinstance(node.args[0], fx.Node)
+        ):
+            qkv_node = node.args[0]
+            val = qkv_node.meta.get("val")
+            if (
+                val is not None
+                and hasattr(val, "shape")
+                and len(val.shape) > 0
+                and val.shape[-1] != expected_qkv_size
+            ):
+                return False
+            tensor_meta = qkv_node.meta.get("tensor_meta")
+            if tensor_meta is not None:
+                shape = getattr(tensor_meta, "shape", None)
+                if shape and len(shape) > 0 and shape[-1] != expected_qkv_size:
+                    return False
+
+    return True
+
+
 class RopeStaticQQuantKVCachePattern:
     """Fuse rope + static Q fp8 quant while preserving explicit KV-cache update
     dependency ordering.
@@ -252,6 +299,11 @@ class RopeStaticQQuantKVCachePattern:
 
         return pattern, replacement
 
+    def _extra_check(self, match: pm.Match) -> bool:
+        return _rope_kvcache_match_shape_check(
+            match, self.q_size + self.k_size + self.v_size
+        )
+
     def register(self, pm_pass: PatternMatcherPass) -> None:
         _ln = _encode_layer_name(self.layer_name)
 
@@ -271,6 +323,7 @@ class RopeStaticQQuantKVCachePattern:
             self.get_inputs(),
             fwd_and_view_to_reshape,
             pm_pass,
+            extra_check=self._extra_check,
         )
 
 
@@ -382,6 +435,11 @@ class RopeReshapeKVCachePattern:
 
         return pattern, replacement
 
+    def _extra_check(self, match: pm.Match) -> bool:
+        return _rope_kvcache_match_shape_check(
+            match, self.q_size + self.k_size + self.v_size
+        )
+
     def register(self, pm_pass: PatternMatcherPass) -> None:
         _ln = _encode_layer_name(self.layer_name)
 
@@ -403,6 +461,7 @@ class RopeReshapeKVCachePattern:
             self.get_inputs(),
             fwd_and_view_to_reshape,
             pm_pass,
+            extra_check=self._extra_check,
         )
 
 
@@ -430,10 +489,23 @@ class RopeKVCacheFusionPass(VllmPatternMatcherPass):
         self.max_token_num = cc.pass_config.rope_kvcache_fusion_max_token_num
 
         attn_layers = get_layers_from_vllm_config(config, Attention)
-        # When _USE_LAYERNAME is enabled, layer_name is a wildcard so all
-        # layers produce the same pattern — register once then break.
+        # When _USE_LAYERNAME is enabled, layer_name is a wildcard for
+        # layers sharing the same attention geometry. Register patterns for
+        # each distinct geometry to support speculative drafters and multi-spec
+        # configurations.
+        registered_geometries: set[tuple[int, int, int, int]] = set()
         for _, layer in attn_layers.items():
             if layer.impl.fused_rope_kvcache_supported():
+                geom = (
+                    layer.num_heads,
+                    layer.num_kv_heads,
+                    layer.head_size,
+                    layer.head_size_v,
+                )
+                if _USE_LAYERNAME and geom in registered_geometries:
+                    continue
+                registered_geometries.add(geom)
+
                 for is_neox in [True, False]:
                     if _supports_static_q_fp8_quant_fusion():
                         RopeStaticQQuantKVCachePattern(
@@ -444,8 +516,6 @@ class RopeKVCacheFusionPass(VllmPatternMatcherPass):
                         layer=layer,
                         is_neox=is_neox,
                     ).register(self.patterns)
-                if _USE_LAYERNAME:
-                    break
 
         self.dump_patterns(config, self.patterns)
 

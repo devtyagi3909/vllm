@@ -98,6 +98,83 @@ def test_rope_kvcache_fusion_default_keeps_large_ranges_unfused():
     assert not fusion_pass.is_applicable_for_range(Range(11651, 16384))
 
 
+def test_rope_kvcache_fusion_registers_distinct_geometries_and_checks_shape(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from unittest.mock import MagicMock
+
+    from torch import fx
+
+    from vllm.config import set_current_vllm_config
+
+    monkeypatch.setattr(
+        rope_kvcache_fusion, "_supports_static_q_fp8_quant_fusion", lambda: False
+    )
+
+    def make_mock_layer(name, num_heads, num_kv_heads, head_size):
+        layer = MagicMock()
+        layer.layer_name = name
+        layer.num_heads = num_heads
+        layer.num_kv_heads = num_kv_heads
+        layer.head_size = head_size
+        layer.head_size_v = head_size
+        layer.impl = MagicMock()
+        layer.impl.fused_rope_kvcache_supported.return_value = True
+        return layer
+
+    layer_target = make_mock_layer("target.layer.0", 32, 8, 128)
+    layer_target_clone = make_mock_layer("target.layer.1", 32, 8, 128)
+    layer_draft = make_mock_layer("draft.layer.0", 16, 4, 64)
+
+    monkeypatch.setattr(
+        rope_kvcache_fusion,
+        "get_layers_from_vllm_config",
+        lambda config, typ: {
+            "target.layer.0": layer_target,
+            "target.layer.1": layer_target_clone,
+            "draft.layer.0": layer_draft,
+        },
+    )
+
+    comp_config = CompilationConfig(
+        mode=CompilationMode.VLLM_COMPILE,
+        pass_config=PassConfig(fuse_rope_kvcache=True),
+    )
+    vllm_config = VllmConfig(compilation_config=comp_config)
+    with set_current_vllm_config(vllm_config):
+        fusion_pass = RopeKVCacheFusionPass(vllm_config)
+
+    assert fusion_pass.patterns is not None
+
+    target_qkv_size = 32 * 128 + 8 * 128 + 8 * 128
+    draft_qkv_size = 16 * 64 + 4 * 64 + 4 * 64
+
+    match_target = MagicMock()
+    qkv_target_node = MagicMock(spec=fx.Node)
+    qkv_target_node.meta = {"val": torch.empty(2, target_qkv_size)}
+    match_target.args = [qkv_target_node]
+    match_target.nodes = []
+
+    match_draft = MagicMock()
+    qkv_draft_node = MagicMock(spec=fx.Node)
+    qkv_draft_node.meta = {"val": torch.empty(2, draft_qkv_size)}
+    match_draft.args = [qkv_draft_node]
+    match_draft.nodes = []
+
+    assert rope_kvcache_fusion._rope_kvcache_match_shape_check(
+        match_target, target_qkv_size
+    )
+    assert not rope_kvcache_fusion._rope_kvcache_match_shape_check(
+        match_draft, target_qkv_size
+    )
+    assert rope_kvcache_fusion._rope_kvcache_match_shape_check(
+        match_draft, draft_qkv_size
+    )
+    assert not rope_kvcache_fusion._rope_kvcache_match_shape_check(
+        match_target, draft_qkv_size
+    )
+
+
 class QKRoPEKVCacheTestModel(torch.nn.Module):
     def __init__(
         self,
