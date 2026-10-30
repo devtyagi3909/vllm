@@ -583,6 +583,8 @@ class MessageQueue:
         self.local_reader_rank = -1
         # rank does not matter for remote readers
         self._is_remote_reader = False
+        self._cancel_socket: zmq.Socket | None = None
+        self._write_cancel_socket: zmq.Socket | None = None
 
         self.handle = Handle(
             local_reader_ranks=local_reader_ranks,
@@ -610,6 +612,13 @@ class MessageQueue:
                 self._spin_condition.read_cancel_socket,
                 self._spin_condition.write_cancel_socket,
             ]
+        if getattr(self, "_write_cancel_socket", None) is not None:
+            sockets.append(self._write_cancel_socket)
+        if (
+            getattr(self, "_cancel_socket", None) is not None
+            and self._cancel_socket not in sockets
+        ):
+            sockets.append(self._cancel_socket)
         finalizer = weakref.finalize(
             self, _close_zmq, context, [s for s in sockets if s is not None]
         )
@@ -663,6 +672,8 @@ class MessageQueue:
             self._spin_condition = SpinCondition(
                 is_reader=True, context=context, notify_address=handle.local_notify_addr
             )
+            self._cancel_socket = self._spin_condition.read_cancel_socket
+            self._write_cancel_socket = None
         else:
             self.buffer = None  # type: ignore
             self.current_idx = -1
@@ -680,6 +691,12 @@ class MessageQueue:
             logger.debug("Connecting to %s", socket_addr)
             self.remote_socket.connect(socket_addr)
             self._spin_condition = None  # type: ignore
+
+            cancel_path = get_open_zmq_inproc_path()
+            self._write_cancel_socket = context.socket(zmq.PAIR)
+            self._write_cancel_socket.bind(cancel_path)
+            self._cancel_socket = context.socket(zmq.PAIR)
+            self._cancel_socket.connect(cancel_path)
 
         self.shutting_down = False
         self._close_zmq_on_collect(context)
@@ -724,6 +741,8 @@ class MessageQueue:
         self.shutting_down = True
         if self._spin_condition is not None:
             self._spin_condition.cancel()
+        if getattr(self, "_write_cancel_socket", None) is not None:
+            self._write_cancel_socket.send(b"\x00")
 
     @contextmanager
     def acquire_write(self, timeout: float | None = None):
@@ -983,6 +1002,8 @@ class MessageQueue:
         indefinite: bool = False,
     ):
         """Read from message queue with optional timeout (in seconds)"""
+        if self.shutting_down:
+            raise RuntimeError("cancelled")
         if self._is_local_reader:
             # See ShmTensorArena.flush_releases for what this retires and why.
             if self.tensor_arena is not None:
@@ -1002,19 +1023,37 @@ class MessageQueue:
                         all_buffers.append(buffer if i == 0 else bytearray(buffer))
                     obj = pickle.loads(all_buffers[0], buffers=all_buffers[1:])
             if overflow:
-                obj = MessageQueue.recv(self.local_socket, timeout)
+                obj = MessageQueue.recv(
+                    self.local_socket, timeout, cancel_socket=self._cancel_socket
+                )
         elif self._is_remote_reader:
-            obj = MessageQueue.recv(self.remote_socket, timeout)
+            obj = MessageQueue.recv(
+                self.remote_socket, timeout, cancel_socket=self._cancel_socket
+            )
         else:
             raise RuntimeError("Only readers can dequeue")
         return obj
 
     @staticmethod
-    def recv(socket: zmq.Socket, timeout: float | None) -> Any:
+    def recv(
+        socket: zmq.Socket,
+        timeout: float | None = None,
+        cancel_socket: zmq.Socket | None = None,
+    ) -> Any:
         # Ensure non-negative timeout passed to zmq poll.
         timeout_ms = None if timeout is None else max(0, int(timeout * 1000))
-        if not socket.poll(timeout=timeout_ms):
-            raise TimeoutError
+        if cancel_socket is not None:
+            poller = zmq.Poller()
+            poller.register(socket, zmq.POLLIN)
+            poller.register(cancel_socket, zmq.POLLIN)
+            events = dict(poller.poll(timeout=timeout_ms))
+            if cancel_socket in events:
+                raise RuntimeError("cancelled")
+            if socket not in events:
+                raise TimeoutError
+        else:
+            if not socket.poll(timeout=timeout_ms):
+                raise TimeoutError
         recv, *recv_oob = socket.recv_multipart(copy=False)
         return pickle.loads(recv, buffers=recv_oob)
 

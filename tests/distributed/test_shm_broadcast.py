@@ -726,6 +726,82 @@ def test_acquire_read_releases_slot_when_reader_raises():
         reader.shutdown()
 
 
+def test_overflow_reader_shutdown_wakes_wait():
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=1,
+        max_chunk_bytes=128,
+        max_chunks=4,
+    )
+    reader = MessageQueue.create_from_handle(writer.export_handle(), rank=0)
+    try:
+        writer.wait_until_ready()
+        reader.wait_until_ready()
+
+        # Commit overflow marker to ring slot without sending payload
+        with writer.acquire_write(timeout=1) as buf:
+            buf[0] = 1
+
+        exc = []
+
+        def reader_task():
+            try:
+                reader.dequeue(indefinite=True)
+            except BaseException as e:
+                exc.append(e)
+
+        t = threading.Thread(target=reader_task, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        reader.shutdown()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        assert len(exc) == 1
+        assert isinstance(exc[0], RuntimeError)
+        assert "cancelled" in str(exc[0])
+    finally:
+        reader.shutdown()
+        writer.shutdown()
+
+
+def test_remote_reader_shutdown_wakes_wait():
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=0,
+        max_chunk_bytes=128,
+        max_chunks=4,
+    )
+    reader = MessageQueue.create_from_handle(writer.export_handle(), rank=1)
+    try:
+        writer.wait_until_ready()
+        reader.wait_until_ready()
+
+        exc = []
+
+        def reader_task():
+            try:
+                reader.dequeue(indefinite=True)
+            except BaseException as e:
+                exc.append(e)
+
+        t = threading.Thread(target=reader_task, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        reader.shutdown()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        assert len(exc) == 1
+        assert isinstance(exc[0], RuntimeError)
+        assert "cancelled" in str(exc[0])
+
+        # Subsequent dequeue on shutdown reader must raise immediately
+        with pytest.raises(RuntimeError, match="cancelled"):
+            reader.dequeue(timeout=0.1)
+    finally:
+        reader.shutdown()
+        writer.shutdown()
+
+
 def test_reader_in_reference_cycle_is_collected_without_blocking():
     writer = MessageQueue(
         n_reader=1,
