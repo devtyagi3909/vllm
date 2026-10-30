@@ -323,6 +323,26 @@ def construct_chat_messages_with_tool_call(
     return messages
 
 
+def _normalize_response_content_part(part: Any) -> Any:
+    if not isinstance(part, dict):
+        return part
+    ptype = part.get("type")
+    if ptype in ("input_text", "output_text"):
+        return {"type": "text", "text": part.get("text", "")}
+    if ptype == "input_image":
+        image_url = part.get("image_url")
+        detail = part.get("detail", "auto")
+        if isinstance(image_url, str):
+            return {
+                "type": "image_url",
+                "image_url": {"url": image_url, "detail": detail},
+            }
+        if isinstance(image_url, dict):
+            return {"type": "image_url", "image_url": image_url}
+        return {"type": "image_url", "image_url": {"url": "", "detail": detail}}
+    return part
+
+
 def _construct_message_from_response_item(
     item: ResponseInputOutputItem,
     prev_msg: ChatCompletionMessageParam | None = None,
@@ -449,6 +469,12 @@ def _construct_message_from_response_item(
                     return None
             return {"role": "assistant", "content": text}
     if isinstance(item, dict) and "role" in item:
+        content = item.get("content")
+        if isinstance(content, list):
+            item = {
+                **item,
+                "content": [_normalize_response_content_part(p) for p in content],
+            }
         return item  # type: ignore[return-value]
     item_type = item.get("type") if isinstance(item, dict) else item.type
     raise VLLMValidationError(

@@ -22,6 +22,52 @@ from .params import ChatParams
 logger = init_logger(__name__)
 
 
+def _normalize_mistral_part(part: Any) -> Any:
+    if not isinstance(part, dict):
+        return part
+    ptype = part.get("type")
+    if ptype in ("input_text", "output_text"):
+        return {"type": "text", "text": part.get("text", "")}
+    if ptype == "input_image":
+        img = part.get("image_url")
+        detail = part.get("detail", "auto")
+        if isinstance(img, str):
+            return {
+                "type": "image_url",
+                "image_url": {"url": img, "detail": detail},
+            }
+        if isinstance(img, dict):
+            return {"type": "image_url", "image_url": img}
+        return {"type": "image_url", "image_url": {"url": "", "detail": detail}}
+    return part
+
+
+def _normalize_mistral_messages(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    normalized: list[ChatCompletionMessageParam] = []
+    has_developer = False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            normalized.append(msg)
+            continue
+        new_msg = dict(msg)
+        if new_msg.get("role") == "developer":
+            new_msg["role"] = "system"
+            new_msg.pop("tools", None)
+            has_developer = True
+        content = new_msg.get("content")
+        if isinstance(content, list):
+            new_msg["content"] = [_normalize_mistral_part(p) for p in content]
+        normalized.append(new_msg)  # type: ignore[arg-type]
+    if has_developer:
+        logger.info_once(
+            "Mistral chat templates do not support the 'developer' role. "
+            "Converting developer messages to 'system' role.",
+        )
+    return normalized
+
+
 def safe_apply_chat_template(
     tokenizer: MistralTokenizer,
     messages: list[ChatCompletionMessageParam],
@@ -29,6 +75,7 @@ def safe_apply_chat_template(
 ) -> str | list[int]:
     from mistral_common.exceptions import MistralCommonException
 
+    messages = _normalize_mistral_messages(messages)
     try:
         return tokenizer.apply_chat_template(messages, **kwargs)
     # mistral-common uses assert statements to stop processing of input

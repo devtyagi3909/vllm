@@ -1018,3 +1018,37 @@ class TestBuildResponseOutputItemsStatus:
         assert message.status == "completed"
         assert first.status == "completed"
         assert last.status == "incomplete"
+
+
+class TestNormalizeResponseContentParts:
+    """Regression test for #64789: Responses API content parts (input_text,
+    output_text, input_image) should normalize to standard chat completion parts."""
+
+    def test_construct_input_messages_normalizes_content_parts(self):
+        req_input = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Hello world"},
+                    {"type": "input_image", "image_url": "https://example.com/cat.png"},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hi there!"},
+                ],
+            },
+        ]
+        msgs = construct_input_messages(request_input=req_input)
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == [
+            {"type": "text", "text": "Hello world"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/cat.png", "detail": "auto"},
+            },
+        ]
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"] == "Hi there!"

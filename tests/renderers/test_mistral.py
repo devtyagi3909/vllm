@@ -196,3 +196,29 @@ def test_apply_mistral_chat_template_thinking_chunk():
     )
 
     assert string_tokens == expected_tokens
+
+
+def test_safe_apply_chat_template_normalizes_input_text_and_developer_role():
+    messages = [
+        {"role": "developer", "content": "You are a concise assistant."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is the capital of France?"}
+            ],
+        },
+    ]
+    mistral_tokenizer = MistralTokenizer.from_pretrained(
+        "mistralai/Magistral-Small-2509"
+    )
+
+    token_ids = safe_apply_chat_template(
+        mistral_tokenizer, messages, chat_template=None, tools=None
+    )
+    assert len(token_ids) > 0
+
+    decoded = mistral_tokenizer.mistral.decode(
+        token_ids, special_token_policy=SpecialTokenPolicy.KEEP
+    )
+    assert "You are a concise assistant." in decoded
+    assert "What is the capital of France?" in decoded
