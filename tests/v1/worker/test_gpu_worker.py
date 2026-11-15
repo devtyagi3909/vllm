@@ -148,6 +148,52 @@ def test_load_model_preserves_compiled_graphs_at_runtime(monkeypatch):
         torch.set_num_threads(original_threads)
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_load_model_warms_up_flashinfer_pcie_ipc_allreduce(monkeypatch, enabled):
+    from unittest.mock import Mock
+
+    from vllm.distributed.device_communicators import (
+        flashinfer_pcie_ipc_all_reduce,
+    )
+    from vllm.model_executor.model_loader.weight_cache.utils import (
+        ExternalWeightCharges,
+    )
+
+    monkeypatch.setenv("VLLM_PP_TRANSPORT", "nccl")
+    monkeypatch.setattr(
+        gpu_worker.envs, "VLLM_ALLREDUCE_USE_FLASHINFER_PCIE_IPC", enabled
+    )
+    monkeypatch.setattr(gpu_worker, "has_ec_transfer", lambda: False)
+    monkeypatch.setattr(
+        gpu_worker, "set_current_vllm_config", lambda config: nullcontext()
+    )
+
+    warmup_mock = Mock()
+    monkeypatch.setattr(
+        flashinfer_pcie_ipc_all_reduce,
+        "warmup_flashinfer_pcie_ipc_allreduce",
+        warmup_mock,
+    )
+
+    worker = SimpleNamespace(
+        vllm_config=SimpleNamespace(weight_transfer_config=None),
+        model_runner=SimpleNamespace(
+            load_model=Mock(),
+            intermediate_tensors=None,
+        ),
+        _maybe_get_memory_pool_context=lambda **kwargs: nullcontext(),
+        _scoped_allocator_max_split=lambda **kwargs: nullcontext(),
+        _external_weight_charges=ExternalWeightCharges(),
+    )
+
+    gpu_worker.Worker.load_model(worker)
+
+    if enabled:
+        warmup_mock.assert_called_once_with(worker)
+    else:
+        warmup_mock.assert_not_called()
+
+
 @pytest.mark.skipif(
     not current_platform.is_cuda_alike()
     or not torch.accelerator.is_available()
