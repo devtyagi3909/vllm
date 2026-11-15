@@ -376,6 +376,9 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
 
     # Allocate the exact decode-sized workspace, autotune cache misses, and
     # resolve every CUDA Graph bucket before capture begins.
+    # Note: FlashInfer PCIe IPC all-reduce is already initialized in
+    # Worker.load_model() prior to memory profiling; this call is an idempotent
+    # fallback.
     # Lazy import: flashinfer_pcie_ipc_all_reduce imports flashinfer.comm,
     # which initializes CUDA at import time and must not run at module scope.
     if envs.VLLM_ALLREDUCE_USE_FLASHINFER_PCIE_IPC:

@@ -65,6 +65,51 @@ def test_setup_uses_exact_graph_capacity(monkeypatch, tmp_path):
     assert workspace.rebind_stream.call_count == 2
 
 
+def test_setup_idempotency_and_empty_cache_cleanup(monkeypatch, tmp_path):
+    workspace = Mock()
+    factory = Mock(return_value=workspace)
+    monkeypatch.setattr(
+        pcie_ipc,
+        "flashinfer_comm",
+        SimpleNamespace(PcieIpcAllReduceWorkspace=factory),
+    )
+    monkeypatch.setattr(torch.accelerator, "synchronize", Mock())
+    empty_cache = Mock()
+    gc_collect = Mock()
+    monkeypatch.setattr(torch.accelerator, "empty_cache", empty_cache)
+    monkeypatch.setattr(pcie_ipc.gc, "collect", gc_collect)
+
+    comm = _uninitialized_comm()
+    cache = tmp_path / "tp4.json"
+    comm.setup(
+        hidden_dim=4096,
+        dtype=torch.bfloat16,
+        capture_sizes=[8, 16],
+        tune_cache=cache,
+    )
+
+    factory.assert_called_once()
+    workspace.tune.assert_called_once()
+    workspace.prepare.assert_called_once()
+    gc_collect.assert_called_once()
+    empty_cache.assert_called_once()
+    assert comm.workspace is workspace
+
+    # Second setup invocation must be a no-op (idempotent)
+    comm.setup(
+        hidden_dim=4096,
+        dtype=torch.bfloat16,
+        capture_sizes=[8, 16],
+        tune_cache=cache,
+    )
+
+    factory.assert_called_once()
+    workspace.tune.assert_called_once()
+    workspace.prepare.assert_called_once()
+    gc_collect.assert_called_once()
+    empty_cache.assert_called_once()
+
+
 @pytest.mark.parametrize(
     ("shape", "dtype", "contiguous", "expected"),
     [

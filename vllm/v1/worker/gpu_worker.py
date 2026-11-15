@@ -645,6 +645,13 @@ class Worker(WorkerBase):
 
             self._pp_transport = create_pp_transport(self.vllm_config, persistent)
 
+        if envs.VLLM_ALLREDUCE_USE_FLASHINFER_PCIE_IPC:
+            from vllm.distributed.device_communicators import (
+                flashinfer_pcie_ipc_all_reduce,
+            )
+
+            flashinfer_pcie_ipc_all_reduce.warmup_flashinfer_pcie_ipc_allreduce(self)
+
         if has_ec_transfer():
             get_ec_transfer().start_worker_services()
 

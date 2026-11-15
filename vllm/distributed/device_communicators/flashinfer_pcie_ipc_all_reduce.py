@@ -8,6 +8,7 @@ existing FlashInfer MNNVL/TRT-LLM all-reduce implementation, so it intentionally
 lives behind a separate wrapper and an opt-in environment variable.
 """
 
+import gc
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -84,8 +85,9 @@ class FlashInferPcieIpcAllReduce:
             )
             return
 
-        # Setup is deferred until kernel_warmup, where the model hidden size and
-        # exact CUDA Graph buckets are known. Until then dispatch falls through.
+        # Setup executes in Worker.load_model() prior to memory profiling,
+        # once the model hidden size and exact CUDA Graph buckets are known.
+        # Until then dispatch falls through.
         self.disabled = False
 
     @property
@@ -146,6 +148,8 @@ class FlashInferPcieIpcAllReduce:
         workspace.prepare([(batch, self.hidden_dim) for batch in batches], dtype=dtype)
         torch.accelerator.synchronize(self.device)
         workspace.rebind_stream()
+        gc.collect()
+        torch.accelerator.empty_cache()
         logger.info_once(
             "Initialized FlashInfer PCIe IPC all-reduce for TP%d, hidden_dim=%d, "
             "dtype=%s, max_tokens=%d.",
